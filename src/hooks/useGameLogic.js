@@ -15,17 +15,14 @@ export const useGameLogic = (canvasRef, gameId, user) => {
         scores: { 1: 0, 2: 0 },
         lastRoll: 0,
         status: 'waiting',
-        // NEW: Fair Play Fields
-        turnDeadline: null,    // Timestamp when turn ends
-        warnings: { 1: 0, 2: 0 }, // Strikes per player
-        winner: null           // Explicit winner (for forfeits)
+        turnDeadline: null,
+        warnings: { 1: 0, 2: 0 },
+        winner: null
     });
     const [diceValue, setDiceValue] = useState(1);
     const [isRolling, setIsRolling] = useState(false);
     const [myRole, setMyRole] = useState(null);
     const [toast, setToast] = useState(null);
-    
-    // NEW: Local Timer Display
     const [timeLeft, setTimeLeft] = useState(30);
 
     const dotsRef = useRef([]);
@@ -34,11 +31,9 @@ export const useGameLogic = (canvasRef, gameId, user) => {
     const dragStateRef = useRef({ isDragging: false, startDot: null, currentPos: { x: 0, y: 0 }, hoverDot: null });
     const isOnline = !!gameId;
 
-    // Constants
-    const TURN_DURATION = 30; // Seconds per turn
+    const TURN_DURATION = 30; 
     const MAX_WARNINGS = 3;
 
-    // --- HELPER: SHOW TOAST ---
     const showToast = (msg, type = 'error') => {
         setToast({ msg, type, id: Date.now() });
         if (type === 'error') playSound('connect');
@@ -60,112 +55,93 @@ export const useGameLogic = (canvasRef, gameId, user) => {
         return () => unsub();
     }, [gameId, user, isOnline]);
 
-    // --- TIMER COUNTDOWN EFFECT ---
+    // --- TIMER LOGIC ---
     useEffect(() => {
         if (!gameState.turnDeadline || gameState.status !== 'playing') return;
-
         const interval = setInterval(() => {
             const remaining = Math.ceil((gameState.turnDeadline - Date.now()) / 1000);
-            
             if (remaining <= 0) {
-                // TIMER EXPIRED! Trigger Timeout Logic
                 clearInterval(interval);
                 handleTimeout(); 
             } else {
                 setTimeLeft(remaining);
             }
         }, 1000);
-
         return () => clearInterval(interval);
     }, [gameState.turnDeadline, gameState.status, gameState.turn, myRole]);
 
-    // --- TIMEOUT HANDLER ---
     const handleTimeout = async () => {
-        // Only the active player (or host if active player is gone) should write to DB to avoid double-writes
-        // For simplicity: If it's MY turn and I timed out, I write. 
-        // OR If I am Host and the other player timed out, I write.
         const isMyTurn = gameState.turn === myRole;
         const isHost = myRole === 1;
-        
-        // We allow the Host to act as the "Server" if the other player is disconnected/AFK
+        // Host acts as authority if active player is AFK
         if (!isMyTurn && !isHost) return;
 
-        const currentWarnings = gameState.warnings[gameState.turn] + 1;
+        const currentWarnings = (gameState.warnings?.[gameState.turn] || 0) + 1;
         const newWarnings = { ...gameState.warnings, [gameState.turn]: currentWarnings };
         
         let updates = {};
-
         if (currentWarnings >= MAX_WARNINGS) {
-            // STRIKE OUT - GAME OVER
-            const otherPlayer = gameState.turn === 1 ? 2 : 1;
-            updates = {
-                status: 'finished',
-                winner: otherPlayer, // Explicitly declare winner by forfeit
-                warnings: newWarnings
-            };
+            updates = { status: 'finished', winner: gameState.turn === 1 ? 2 : 1, warnings: newWarnings };
         } else {
-            // JUST A WARNING - SKIP TURN
             updates = {
                 turn: gameState.turn === 1 ? 2 : 1,
                 moves: 0,
                 lastRoll: 0,
-                turnDeadline: Date.now() + (TURN_DURATION * 1000), // Reset timer for next player
+                turnDeadline: Date.now() + (TURN_DURATION * 1000),
                 warnings: newWarnings
             };
         }
-
-        if (isOnline) {
-            await updateDoc(doc(db, "games", gameId), updates);
-        }
+        if (isOnline) await updateDoc(doc(db, "games", gameId), updates);
     };
 
-    // --- AUTO-JOIN ---
+    // --- AUTO-JOIN LOGIC (FIXED) ---
     useEffect(() => {
         if (!isOnline || !gameId || !user) return;
-        if (gameState.status === 'waiting' && gameState.host?.uid && gameState.host.uid !== user.uid && !gameState.guest) {
+        
+        // Wait until we actually have the Host data from Firebase
+        if (!gameState.host) return; 
+
+        // If I am NOT the host, and the Guest slot is empty...
+        if (gameState.status === 'waiting' && gameState.host.uid !== user.uid && !gameState.guest) {
             const joinGame = async () => {
-                await updateDoc(doc(db, "games", gameId), {
-                    guest: { uid: user.uid, name: user.displayName || 'Guest', photo: user.photoURL },
-                    status: 'playing',
-                    turnDeadline: Date.now() + (TURN_DURATION * 1000) // Start Timer!
-                });
+                try {
+                    console.log("Found open game. Joining as Guest...");
+                    await updateDoc(doc(db, "games", gameId), {
+                        guest: { uid: user.uid, name: user.displayName || 'Guest', photo: user.photoURL },
+                        status: 'playing',
+                        turnDeadline: Date.now() + (TURN_DURATION * 1000)
+                    });
+                } catch (e) {
+                    console.error("Join failed:", e);
+                }
             };
             joinGame();
         }
-    }, [gameId, user, isOnline, gameState.status]);
+    }, [gameId, user, isOnline, gameState]); // <--- FIX: Added 'gameState' so it re-runs when DB loads!
 
     // --- ACTIONS ---
     const handleRoll = async () => {
-        // 1. FIX: Check Turn FIRST
         if (isOnline && gameState.turn !== myRole) return showToast("Not your turn!", "error");
-        
-        // 2. Check Moves
         if (gameState.moves > 0) return showToast(`You have ${gameState.moves} moves left!`);
         if (isRolling) return;
 
         playSound('roll');
         setIsRolling(true);
-
         const roll = Math.floor(Math.random() * 6) + 1;
-        setDiceValue(roll);
+        setDiceValue(roll); // Visual update
 
         setTimeout(async () => {
             setIsRolling(false);
-            const updates = { lastRoll: roll, moves: roll };
-            
             if (isOnline) {
-                await updateDoc(doc(db, "games", gameId), updates);
+                await updateDoc(doc(db, "games", gameId), { lastRoll: roll, moves: roll });
             } else {
-                setGameState(prev => ({ ...prev, ...updates }));
+                setGameState(prev => ({ ...prev, moves: roll, lastRoll: roll }));
             }
         }, 1000);
     };
 
     const handleMove = async (p1, p2) => {
-        // 1. FIX: Check Turn FIRST
         if (isOnline && gameState.turn !== myRole) return showToast("Not your turn!", "error");
-        
-        // 2. Check Roll
         if (gameState.moves <= 0) return showToast("Roll the dice first!");
 
         const { size, cols, margin } = paramsRef.current;
@@ -177,37 +153,26 @@ export const useGameLogic = (canvasRef, gameId, user) => {
         const newLine = { p1: p1.id, p2: p2.id, player: gameState.turn };
         const nextLines = [...gameState.lines, newLine];
         const newTriangles = findNewTriangles(p1, p2, nextLines, gameState.triangles, gameState.turn);
-
         const nextTrianglesList = [...gameState.triangles, ...newTriangles];
         let nextMoves = gameState.moves - 1;
         let nextTurn = gameState.turn;
         const nextScores = { ...gameState.scores };
 
-        // Handle Score
         if (newTriangles.length > 0) {
             nextScores[gameState.turn] += newTriangles.length;
             playSound('score');
-            // Confetti
             const rect = canvasRef.current.getBoundingClientRect();
             const midX = (rect.left + rect.width / 2) / window.innerWidth;
             const midY = (rect.top + rect.height / 2) / window.innerHeight;
-            confetti({
-                particleCount: 50 * newTriangles.length,
-                spread: 60,
-                origin: { x: midX, y: midY },
-                colors: gameState.turn === 1 ? ['#3b82f6', '#60a5fa'] : ['#22c55e', '#4ade80']
-            });
+            confetti({ particleCount: 50 * newTriangles.length, spread: 60, origin: { x: midX, y: midY }, colors: gameState.turn === 1 ? ['#3b82f6', '#60a5fa'] : ['#22c55e', '#4ade80'] });
         } else {
             playSound('connect');
         }
 
         let newDeadline = gameState.turnDeadline;
-
-        // Turn Switch Logic
         if (nextMoves === 0) {
             nextTurn = gameState.turn === 1 ? 2 : 1;
-            // NEW: Reset Timer for next player
-            newDeadline = Date.now() + (TURN_DURATION * 1000); 
+            newDeadline = Date.now() + (TURN_DURATION * 1000);
         }
 
         let status = gameState.status;
@@ -215,48 +180,31 @@ export const useGameLogic = (canvasRef, gameId, user) => {
         if (isGameFinished(dotsRef.current, nextLines, maxDist)) {
             status = 'finished';
             playSound('win');
-            // Determine winner normally if board is full
             if (nextScores[1] > nextScores[2]) winner = 1;
             else if (nextScores[2] > nextScores[1]) winner = 2;
             else winner = 'tie';
         }
 
         const updates = {
-            lines: nextLines,
-            triangles: nextTrianglesList,
-            moves: nextMoves,
-            scores: nextScores,
-            turn: nextTurn,
-            status: status,
-            turnDeadline: newDeadline,
-            winner: winner
+            lines: nextLines, triangles: nextTrianglesList, moves: nextMoves, scores: nextScores,
+            turn: nextTurn, status: status, turnDeadline: newDeadline, winner: winner
         };
 
-        if (isOnline) {
-            await updateDoc(doc(db, "games", gameId), updates);
-        } else {
-            setGameState(prev => ({ ...prev, ...updates }));
-        }
+        if (isOnline) await updateDoc(doc(db, "games", gameId), updates);
+        else setGameState(prev => ({ ...prev, ...updates }));
     };
 
-    // --- FORFEIT / EXIT ---
     const handleExit = async () => {
         if (isOnline && gameState.status === 'playing') {
-            const otherPlayer = myRole === 1 ? 2 : 1;
             await updateDoc(doc(db, "games", gameId), {
                 status: 'finished',
-                winner: otherPlayer // Opponent wins immediately
+                winner: myRole === 1 ? 2 : 1 
             });
         }
         window.location.href = '/';
     };
 
-    // ... (Keep Canvas Setup, Interaction, DrawBoard, Helper functions as they were) ...
-    // NOTE: For brevity, assume standard canvas logic is here. 
-    // Just make sure to include the `handleExit` in the return below.
-
-    // --- RE-INSERT STANDARD CANVAS LOGIC HERE TO COMPLETE THE FILE ---
-     // --- CANVAS SETUP ---
+    // --- CANVAS SETUP ---
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -266,16 +214,13 @@ export const useGameLogic = (canvasRef, gameId, user) => {
             const parent = canvas.parentElement;
             const size = Math.min(parent.clientWidth, parent.clientHeight);
             const dpr = window.devicePixelRatio || 1;
-            canvas.width = size * dpr;
-            canvas.height = size * dpr;
-            canvas.style.width = `${size}px`;
-            canvas.style.height = `${size}px`;
+            canvas.width = size * dpr; canvas.height = size * dpr;
+            canvas.style.width = `${size}px`; canvas.style.height = `${size}px`;
             ctxRef.current.scale(dpr, dpr);
             paramsRef.current.size = size;
             generateDots(size);
         };
-        window.addEventListener('resize', resize);
-        resize();
+        window.addEventListener('resize', resize); resize();
         let animationFrameId;
         const render = () => { drawBoard(); animationFrameId = requestAnimationFrame(render); };
         render();
@@ -304,8 +249,7 @@ export const useGameLogic = (canvasRef, gameId, user) => {
         return dotsRef.current.find(d => Math.hypot(d.x - x, d.y - y) < hitRadius);
     };
     const drawBoard = () => {
-        const ctx = ctxRef.current;
-        const { size } = paramsRef.current;
+        const ctx = ctxRef.current; const { size } = paramsRef.current;
         if (!ctx) return;
         ctx.clearRect(0, 0, size, size);
         gameState.triangles.forEach(t => {
