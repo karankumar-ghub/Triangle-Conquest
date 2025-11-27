@@ -17,13 +17,17 @@ export const useGameLogic = (canvasRef, gameId, user) => {
         status: 'waiting',
         turnDeadline: null,
         warnings: { 1: 0, 2: 0 },
-        winner: null
+        winner: null,
+        rollID: 0 // Track unique rolls in DB
     });
     const [diceValue, setDiceValue] = useState(1);
     const [isRolling, setIsRolling] = useState(false);
     const [myRole, setMyRole] = useState(null);
     const [toast, setToast] = useState(null);
     const [timeLeft, setTimeLeft] = useState(30);
+    
+    // NEW: Trigger for animation (uses timestamp to ensure uniqueness)
+    const [rollTrigger, setRollTrigger] = useState(0);
 
     const dotsRef = useRef([]);
     const ctxRef = useRef(null);
@@ -48,6 +52,12 @@ export const useGameLogic = (canvasRef, gameId, user) => {
                 const data = docSnap.data();
                 setGameState(prev => ({ ...prev, ...data }));
                 if (data.lastRoll) setDiceValue(data.lastRoll);
+                
+                // NEW: Sync remote rolls to local animation trigger
+                if (data.rollID) {
+                    setRollTrigger(data.rollID);
+                }
+
                 if (user && data.host?.uid === user.uid) setMyRole(1);
                 else if (user && data.guest?.uid === user.uid) setMyRole(2);
             }
@@ -73,7 +83,6 @@ export const useGameLogic = (canvasRef, gameId, user) => {
     const handleTimeout = async () => {
         const isMyTurn = gameState.turn === myRole;
         const isHost = myRole === 1;
-        // Host acts as authority if active player is AFK
         if (!isMyTurn && !isHost) return;
 
         const currentWarnings = (gameState.warnings?.[gameState.turn] || 0) + 1;
@@ -94,14 +103,10 @@ export const useGameLogic = (canvasRef, gameId, user) => {
         if (isOnline) await updateDoc(doc(db, "games", gameId), updates);
     };
 
-    // --- AUTO-JOIN LOGIC (FIXED) ---
+    // --- AUTO-JOIN LOGIC ---
     useEffect(() => {
         if (!isOnline || !gameId || !user) return;
-        
-        // Wait until we actually have the Host data from Firebase
         if (!gameState.host) return; 
-
-        // If I am NOT the host, and the Guest slot is empty...
         if (gameState.status === 'waiting' && gameState.host.uid !== user.uid && !gameState.guest) {
             const joinGame = async () => {
                 try {
@@ -117,7 +122,7 @@ export const useGameLogic = (canvasRef, gameId, user) => {
             };
             joinGame();
         }
-    }, [gameId, user, isOnline, gameState]); // <--- FIX: Added 'gameState' so it re-runs when DB loads!
+    }, [gameId, user, isOnline, gameState]); 
 
     // --- ACTIONS ---
     const handleRoll = async () => {
@@ -127,13 +132,21 @@ export const useGameLogic = (canvasRef, gameId, user) => {
 
         playSound('roll');
         setIsRolling(true);
+
         const roll = Math.floor(Math.random() * 6) + 1;
-        setDiceValue(roll); // Visual update
+        const newRollID = Date.now(); // Unique ID for this roll event
+
+        setDiceValue(roll); 
+        setRollTrigger(newRollID); // Trigger local animation immediately
 
         setTimeout(async () => {
             setIsRolling(false);
             if (isOnline) {
-                await updateDoc(doc(db, "games", gameId), { lastRoll: roll, moves: roll });
+                await updateDoc(doc(db, "games", gameId), { 
+                    lastRoll: roll, 
+                    moves: roll,
+                    rollID: newRollID // Send unique ID to DB
+                });
             } else {
                 setGameState(prev => ({ ...prev, moves: roll, lastRoll: roll }));
             }
@@ -305,5 +318,5 @@ export const useGameLogic = (canvasRef, gameId, user) => {
         window.addEventListener('keydown', handleKeyDown); return () => window.removeEventListener('keydown', handleKeyDown);
     }, [gameState.moves, gameState.turn, myRole, isRolling, isOnline]);
 
-    return { gameState, diceValue, isRolling, handleRoll, interaction, myRole, toast, timeLeft, handleExit };
+    return { gameState, diceValue, isRolling, handleRoll, interaction, myRole, toast, timeLeft, handleExit, rollTrigger };
 };

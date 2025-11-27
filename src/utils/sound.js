@@ -2,6 +2,8 @@
 
 // Simple synthesizer for game sounds (No external assets needed!)
 export const playSound = (type) => {
+
+    if (localStorage.getItem('triangle_mute') === 'true') return;
     // Check if browser supports AudioContext
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return;
