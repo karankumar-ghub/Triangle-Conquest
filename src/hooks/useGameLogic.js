@@ -18,15 +18,13 @@ export const useGameLogic = (canvasRef, gameId, user) => {
         turnDeadline: null,
         warnings: { 1: 0, 2: 0 },
         winner: null,
-        rollID: 0 // Track unique rolls in DB
+        rollID: 0
     });
     const [diceValue, setDiceValue] = useState(1);
     const [isRolling, setIsRolling] = useState(false);
     const [myRole, setMyRole] = useState(null);
     const [toast, setToast] = useState(null);
     const [timeLeft, setTimeLeft] = useState(30);
-    
-    // NEW: Trigger for animation (uses timestamp to ensure uniqueness)
     const [rollTrigger, setRollTrigger] = useState(0);
 
     const dotsRef = useRef([]);
@@ -52,12 +50,7 @@ export const useGameLogic = (canvasRef, gameId, user) => {
                 const data = docSnap.data();
                 setGameState(prev => ({ ...prev, ...data }));
                 if (data.lastRoll) setDiceValue(data.lastRoll);
-                
-                // NEW: Sync remote rolls to local animation trigger
-                if (data.rollID) {
-                    setRollTrigger(data.rollID);
-                }
-
+                if (data.rollID) setRollTrigger(data.rollID);
                 if (user && data.host?.uid === user.uid) setMyRole(1);
                 else if (user && data.guest?.uid === user.uid) setMyRole(2);
             }
@@ -110,15 +103,12 @@ export const useGameLogic = (canvasRef, gameId, user) => {
         if (gameState.status === 'waiting' && gameState.host.uid !== user.uid && !gameState.guest) {
             const joinGame = async () => {
                 try {
-                    console.log("Found open game. Joining as Guest...");
                     await updateDoc(doc(db, "games", gameId), {
                         guest: { uid: user.uid, name: user.displayName || 'Guest', photo: user.photoURL },
                         status: 'playing',
                         turnDeadline: Date.now() + (TURN_DURATION * 1000)
                     });
-                } catch (e) {
-                    console.error("Join failed:", e);
-                }
+                } catch (e) { console.error(e); }
             };
             joinGame();
         }
@@ -134,19 +124,14 @@ export const useGameLogic = (canvasRef, gameId, user) => {
         setIsRolling(true);
 
         const roll = Math.floor(Math.random() * 6) + 1;
-        const newRollID = Date.now(); // Unique ID for this roll event
-
+        const newRollID = Date.now();
         setDiceValue(roll); 
-        setRollTrigger(newRollID); // Trigger local animation immediately
+        setRollTrigger(newRollID);
 
         setTimeout(async () => {
             setIsRolling(false);
             if (isOnline) {
-                await updateDoc(doc(db, "games", gameId), { 
-                    lastRoll: roll, 
-                    moves: roll,
-                    rollID: newRollID // Send unique ID to DB
-                });
+                await updateDoc(doc(db, "games", gameId), { lastRoll: roll, moves: roll, rollID: newRollID });
             } else {
                 setGameState(prev => ({ ...prev, moves: roll, lastRoll: roll }));
             }
@@ -255,22 +240,30 @@ export const useGameLogic = (canvasRef, gameId, user) => {
         }}
         dotsRef.current = newDots;
     };
+
     const getDotAt = (x, y) => {
         const { size, cols, margin } = paramsRef.current;
         const colStep = (size - margin * 2) / (cols - 1);
         const hitRadius = colStep * 0.4;
         return dotsRef.current.find(d => Math.hypot(d.x - x, d.y - y) < hitRadius);
     };
+
     const drawBoard = () => {
-        const ctx = ctxRef.current; const { size } = paramsRef.current;
+        const ctx = ctxRef.current; 
+        const { size } = paramsRef.current;
         if (!ctx) return;
+        
         ctx.clearRect(0, 0, size, size);
+
+        // 1. Triangles
         gameState.triangles.forEach(t => {
             const p1 = dotsRef.current[t.p1], p2 = dotsRef.current[t.p2], p3 = dotsRef.current[t.p3];
             if (!p1 || !p2 || !p3) return;
             ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.lineTo(p3.x, p3.y);
             ctx.fillStyle = t.player === 1 ? 'rgba(96, 165, 250, 0.25)' : 'rgba(34, 197, 94, 0.25)'; ctx.fill();
         });
+
+        // 2. Lines
         ctx.lineWidth = 4; ctx.lineCap = 'round';
         gameState.lines.forEach(l => {
             const p1 = dotsRef.current[l.p1], p2 = dotsRef.current[l.p2];
@@ -278,7 +271,28 @@ export const useGameLogic = (canvasRef, gameId, user) => {
             ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
             ctx.strokeStyle = l.player === 1 ? '#60a5fa' : '#4ade80'; ctx.stroke();
         });
+
+        // 3. Highlight Last Move (NEW)
+        if (gameState.lines.length > 0) {
+            const lastLine = gameState.lines[gameState.lines.length - 1];
+            const p1 = dotsRef.current[lastLine.p1];
+            const p2 = dotsRef.current[lastLine.p2];
+            if (p1 && p2) {
+                ctx.save();
+                ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
+                // Glowing effect
+                ctx.shadowColor = "white"; ctx.shadowBlur = 15; 
+                ctx.strokeStyle = "white"; ctx.lineWidth = 3; 
+                ctx.globalAlpha = 0.6;
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+
+        // 4. Dots
         dotsRef.current.forEach(d => { ctx.beginPath(); ctx.arc(d.x, d.y, 6, 0, Math.PI * 2); ctx.fillStyle = '#334155'; ctx.fill(); });
+
+        // 5. Interaction (Drag Line)
         const { isDragging, startDot, currentPos, hoverDot } = dragStateRef.current;
         if (hoverDot) { ctx.beginPath(); ctx.arc(hoverDot.x, hoverDot.y, 10, 0, Math.PI * 2); ctx.fillStyle = "white"; ctx.fill(); }
         if (isDragging && startDot) {
@@ -288,6 +302,7 @@ export const useGameLogic = (canvasRef, gameId, user) => {
             ctx.lineTo(targetX, targetY); ctx.strokeStyle = "white"; ctx.lineWidth = 3; ctx.setLineDash([5, 5]); ctx.stroke(); ctx.setLineDash([]);
         }
     };
+
     const interaction = {
         onDown: (e) => {
             if (!canvasRef.current) return;
