@@ -66,7 +66,7 @@ const ProfileSetup = ({ user, onComplete }) => {
                     <button 
                         type="submit" 
                         disabled={!name.trim() || loading}
-                        className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg transition-all ${!name.trim() ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:scale-[1.02] text-white'}`}
+                        className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg transition-all ${!name.trim() ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-linear-to-r from-blue-600 to-purple-600 hover:scale-[1.02] text-white'}`}
                     >
                         {loading ? 'INITIALIZING...' : 'ENTER SYSTEM'}
                     </button>
