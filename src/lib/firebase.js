@@ -3,13 +3,13 @@ import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-    apiKey: import.meta.env.VITE_API_KEY,
-    authDomain: import.meta.env.VITE_AUTH_DOMAIN,
-    projectId: import.meta.env.VITE_PROJECT_ID,
-    storageBucket: import.meta.env.VITE_STORAGE_BUCKET,
-    messagingSenderId: import.meta.env.VITE_MESSAGING_SENDER_ID,
-    appId: import.meta.env.VITE_APP_ID,
-    measurementId: import.meta.env.VITE_MEASUREMENT_ID
+    apiKey: "AIzaSyCxehsr6mPBnUJ5sMHCpv9zBmmxUwWNWkU",
+    authDomain: "triangleconquest.firebaseapp.com",
+    projectId: "triangleconquest",
+    storageBucket: "triangleconquest.firebasestorage.app",
+    messagingSenderId: "989751740628",
+    appId: "1:989751740628:web:3acb3f477153e963b59341",
+    measurementId: "G-RT6M259ZE5"
 };
 
 const app = initializeApp(firebaseConfig);
